@@ -16,22 +16,25 @@
 %% specific language governing permissions and limitations
 %% under the License.
 %%
+%% This module is responsible for collecting download information
+%% from Amazon S3.
+%%
 %% -------------------------------------------------------------------
 
-{application, deploy_track, [
-    {description, "Basho Deployment Tracker"},
-    {vsn, "1.0.0"},
-    {registered, [deploy_track]},
-    {applications, [
-        kernel,
-        stdlib,
-        lager,
-        ssl,
-        ibrowse,
-        erlcloud
-    ]},
-    {modules, [deploy_track, deploy_track_analytics, deploy_track_pkgcloud, deploy_track_s3, deploy_track_sup]},
-    {mod, {deploy_track, []}},
-    {env, []},
-    {links,[{"Github","https://github.com/basho-bin/deploy_track"}]}
-]}.
+-author("hazen").
+-record(analytics, {
+    key              :: string(),
+    source           :: deploy_track_analytics:source(),
+    timestamp        :: calendar:datetime(),
+    ip               :: string(),
+    filename         :: string(),
+    product          :: string(),
+    version          :: string(),
+    release = "-"    :: string(),
+    os               :: string(),
+    os_version       :: string(),
+    user_agent       :: string()
+    %% Unused
+    %%ip_details       :: {ok, deploy_track_util:proplist()} |
+    %%                    {error, list()} | term()
+}).

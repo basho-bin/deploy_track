@@ -16,15 +16,14 @@
 %% specific language governing permissions and limitations
 %% under the License.
 %%
-%% This module is responsible for uploading download information
-%% up to Google Analytics.
+%% This module is responsible looking up information for a
+%% given IP.
 %%
-%% https://developers.google.com/analytics/
-%% https://developers.google.com/analytics/devguides/collection/protocol/v1/parameters
+%% http://ip-api.com/docs
 %%
 %% -------------------------------------------------------------------
 
--module(deploy_track_analytics).
+-module(deploy_track_ip).
 -author("hazen").
 
 -behaviour(gen_server).
@@ -32,14 +31,12 @@
 
 %% API
 -export([
-    csv_format/1,
-    csv_header/0,
-    encode_payload/2,
+    csv_headers/0,
+    lookup_ip/1,
     start_link/0,
-    write_record/1
+    tags/0,
+    to_csv/1
 ]).
--type source() :: pkgcloud | s3 | github.
--export_type([source/0]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -50,21 +47,52 @@
     code_change/3]).
 
 -define(SERVER, ?MODULE).
--define(FOUR_HOURS, 4 * 60 * 60).
--include("deploy_track.hrl").
+-define(QUERIES_PER_MINUTE, 150).
+-define(ONE_MINUTE, 60000).
+-define(NUM_ELEMENTS, 12).
 
 -record(state, {
-    url        :: string(),
-    tid        :: binary() %% tracking id
+    enabled    = false     :: boolean(),
+    lookups    = 0         :: integer(),
+    start_time = undefined :: calendar:timestamp()
 }).
+
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 
+-spec tags() -> [atom()].
+tags() -> [as, city, country, countryCode, isp, lat,
+           lon, org, region, regionName, timezone, zip].
+
 %%--------------------------------------------------------------------
 %% @doc
-%% Starts the Google Analytics server
+%% Generate a CSV header, if IP-lookup is enabled.
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec csv_headers() -> string().
+csv_headers() ->
+    gen_server:call({global, ?SERVER}, csv_headers).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Convert to a CSV record
+%%
+%% @end
+%%--------------------------------------------------------------------
+to_csv({ok, []}) ->
+    "";
+to_csv({ok, Result}) ->
+    csv_row_if_valid(proplists:get_value(status, Result), Result);
+to_csv(Err) ->
+    lager:error("~p", [Err]),
+    csv_row_if_valid([], []).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Starts the server
 %%
 %% @end
 %%--------------------------------------------------------------------
@@ -75,64 +103,14 @@ start_link() ->
 
 %%--------------------------------------------------------------------
 %% @doc
-%% CSV Header record
+%% Look up an IP, if IP-lookup is enabled.
+%%
 %% @end
 %%--------------------------------------------------------------------
-
--spec csv_header() -> string().
-csv_header() ->
-    Fmt = csv_format_string(),
-    deploy_track_util:flat_format(Fmt,
-        ["Key",
-         "Source",
-         "Timestamp",
-         "IP",
-         "Filename",
-         "Product",
-         "Version",
-         "Release",
-         "OS",
-         "OS Version",
-         "User Agent",
-         deploy_track_ip:csv_headers()]).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Format log entry as a CSV
-%% @end
-%%--------------------------------------------------------------------
-
--spec csv_format(A :: #analytics{}) -> string().
-csv_format(A) ->
-    Fmt = csv_format_string(),
-    deploy_track_util:flat_format(Fmt,
-        [A#analytics.key,
-         atom_to_list(A#analytics.source),
-         deploy_track_util:iso_8601_date_format(A#analytics.timestamp),
-         A#analytics.ip,
-         A#analytics.filename,
-         A#analytics.product,
-         A#analytics.version,
-         A#analytics.release,
-         A#analytics.os,
-         A#analytics.os_version,
-         A#analytics.user_agent]).
-         %% UNUSED
-         %%deploy_track_ip:to_csv(A#analytics.ip_details)]).
-
-csv_format_string() ->
-    string:join(lists:duplicate(11, "\"~s\""), ",") ++
-       ",~s".
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Write a single Analytics record
-%% @end
-%%--------------------------------------------------------------------
-
--spec write_record(Record :: #analytics{}) -> ok.
-write_record(Record) ->
-    gen_server:call({global, ?SERVER}, {write_record, Record}).
+-spec lookup_ip(IP :: string()) ->
+    {ok, string()} | {error, {string(), integer(), list(), string()}} | term().
+lookup_ip(IP) ->
+    gen_server:call({global, ?SERVER}, {lookup, IP}, ?ONE_MINUTE + 1000).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -153,12 +131,11 @@ write_record(Record) ->
     {ok, State :: #state{}} | {ok, State :: #state{}, timeout() | hibernate} |
     {stop, Reason :: term()} | ignore).
 init([]) ->
-    Url = application:get_env(deploy_track, analytics_url,
-                              "https://www.google-analytics.com/collect"),
-    {ok, Tid} = application:get_env(deploy_track, analytics_tid),
-    lager:info("Using GA TID ~p", [Tid]),
-    {ok, #state{url = Url,
-                tid = Tid}}.
+    ok = deploy_track_util:ensure_ssl_is_up(),
+    ok = deploy_track_util:ensure_lager_is_up(),
+    ok = deploy_track_util:ensure_services_are_up([ibrowse]),
+    Enabled = application:get_env(deploy_track, geolocation, false),
+    {ok, #state{enabled = Enabled}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -175,9 +152,26 @@ init([]) ->
     {noreply, NewState :: #state{}, timeout() | hibernate} |
     {stop, Reason :: term(), Reply :: term(), NewState :: #state{}} |
     {stop, Reason :: term(), NewState :: #state{}}).
-handle_call({write_record, Record}, _From, State) ->
-    Result = do_write_analytics_record(Record, State),
-    {reply, Result, State};
+handle_call(csv_headers, _From, State = #state{enabled = Enabled}) ->
+    Reply = case Enabled of true ->
+            string:join(lists:map(fun(X) ->
+            Title = map_tag_to_title(X),
+            deploy_track_util:flat_format("\"~s\"", [Title])
+                              end,
+            tags()), ",");
+        _ ->
+            ""
+    end,
+    {reply, Reply, State};
+handle_call({lookup, IP}, _From, State = #state{enabled = Enabled}) ->
+    {Result, NewState} =
+        case Enabled of
+             true ->
+                {send_request(IP), delay_request(State)};
+            _ ->
+                {{ok, []}, State}
+        end,
+    {reply, Result, NewState};
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
@@ -245,72 +239,60 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+-spec csv_row_if_valid(string(), deploy_track_util:proplist()) -> string().
+csv_row_if_valid(<<"success">>, Result) ->
+    Values = lists:map(fun(Key) ->
+        Value = proplists:get_value(Key, Result),
+        deploy_track_util:flat_format("\"~s\"",
+            [deploy_track_util:stringify(Value)])
+                       end, tags()),
+    string:join(Values, ",");
+csv_row_if_valid(_, _) ->
+    blank_csv_row().
 
-%% @doc Prepare the GA hit payload
--spec encode_payload(A :: #analytics{}, #state{}) -> string().
-encode_payload(A = #analytics{}, #state{tid = Tid}) ->
-    IP = A#analytics.ip,
-    Agent = A#analytics.user_agent,
-    UuidKey = crypto:hash(sha, IP ++ Agent),
-    Cid = uuid_string(UuidKey),
-    ExtractTime = calendar:datetime_to_gregorian_seconds(A#analytics.timestamp),
-    Now = calendar:datetime_to_gregorian_seconds(calendar:universal_time()),
-    Delta = Now - ExtractTime,
-    %% Google Analytics has a window of 4 hours, if we miss it then go
-    %% with the max
-    QueueTime = case Delta < ?FOUR_HOURS of
-        true -> case Delta < 0 of
-                    true -> 0;
-                    _ -> Delta * 1000 %% Convert to milliseconds
+-spec blank_csv_row() -> string().
+blank_csv_row() ->
+    string:join(lists:duplicate(?NUM_ELEMENTS, "\"\""), ",").
 
-                end;
-        _ -> ?FOUR_HOURS * 1000 - 1
+-spec map_tag_to_title(atom()) -> string().
+map_tag_to_title(as) -> "As";
+map_tag_to_title(city) -> "City";
+map_tag_to_title(country) -> "Country";
+map_tag_to_title(countryCode) -> "Country Code";
+map_tag_to_title(isp) -> "ISP";
+map_tag_to_title(lat) -> "Latitude";
+map_tag_to_title(lon) -> "Longitude";
+map_tag_to_title(org) -> "Organization";
+map_tag_to_title(region) -> "Region";
+map_tag_to_title(regionName) -> "Region Name";
+map_tag_to_title(timezone) -> "Time Zone";
+map_tag_to_title(zip) -> "Postal Code".
+
+%% @doc Send an HTTP request to the server
+-spec send_request(IP :: string()) ->
+    {ok, string()} | {error, {string(), integer(), list(), string()}} | term().
+send_request(IP) ->
+    Template = "/json/:ip",
+    Params = [{ip, IP}],
+    deploy_track_util:send_request("http://ip-api.com", get, Params,
+        Template, []).
+
+%% @doc Obey the rules of requests per minute
+-spec delay_request(#state{}) -> #state{}.
+delay_request(State = #state{lookups = ?QUERIES_PER_MINUTE,
+                             start_time = StartTime}) ->
+    Now = erlang:system_time(seconds),
+    case (Now - StartTime) < 60 of
+        %% If a minute has not elapsed, just sleep on it to be safe
+        true ->
+            lager:debug("Exceeded the request rate. Sleeping", []),
+            timer:sleep(?ONE_MINUTE);
+        _ -> ok
     end,
-    Args = [{v, 1},
-            {tid, Tid},
-            {an, "Riak"},
-            {t, event},
-            {ec, deploy},
-            {ea, A#analytics.source},
-            {ds, A#analytics.source},
-            {qt, QueueTime},
-            {cid, Cid},
-            {uip, IP},
-            {cd1, A#analytics.product},
-            {cd2, A#analytics.version},
-            {cd3, A#analytics.os},
-            {cd4, A#analytics.os_version},
-            {cd5, deploy_track_util:iso_8601_date_format(A#analytics.timestamp)},
-            {ua, A#analytics.user_agent}],
-    deploy_track_util:encode_query_string(Args) ++ "\r\n".
-
--spec uuid_string(binary()) -> string().
-uuid_string(U) ->
-    deploy_track_util:flat_format("~8.16.0b-~4.16.0b-~4.16.0b-~2.16.0b~2.16.0b-~12.16.0b",
-                                  get_uuid_parts(U)).
-
-%% UUID defined: https://tools.ietf.org/html/rfc4122
-%% UUID                   = time-low "-" time-mid "-"
-%%                          time-high-and-version "-"
-%%                          clock-seq-and-reserved
-%%                          clock-seq-low "-" node
-%% time-low               = 4hexOctet
-%% time-mid               = 2hexOctet
-%% time-high-and-version  = 2hexOctet
-%% clock-seq-and-reserved = hexOctet
-%% clock-seq-low          = hexOctet
-%% node                   = 6hexOctet
--spec get_uuid_parts(binary()) -> [integer()].
-get_uuid_parts(<<TL:32, TM:16, THV:16, CSR:8, CSL:8, N:48, _/binary>>) ->
-    [TL, TM, THV, CSR, CSL, N].
-
-%% Actually send the analytics record to GA
--spec do_write_analytics_record(Record :: #analytics{},
-                                State :: #state{}) -> term().
-do_write_analytics_record(Record, State = #state{url = Url}) ->
-    Payload = encode_payload(Record, State),
-    lager:debug("Posting to GA ~p", [Payload]),
-    Result = deploy_track_util:send_request(Url, post, [], [], [], Payload),
-    lager:debug("GA Result = ~p", [Result]),
-    {ok, _} = Result,
-    Result.
+    State#state{lookups = 1,
+                start_time = erlang:system_time(seconds)};
+delay_request(State = #state{lookups = 0}) ->
+    State#state{lookups = 1,
+                start_time = erlang:system_time(seconds)};
+delay_request(State = #state{lookups = Lookups}) ->
+    State#state{lookups = Lookups + 1}.

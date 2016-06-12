@@ -65,11 +65,10 @@ start_link() ->
 %%--------------------------------------------------------------------
 -spec(init(Args :: term()) ->
     {ok, {SupFlags :: {RestartStrategy :: supervisor:strategy(),
-        MaxR :: non_neg_integer(), MaxT :: non_neg_integer()},
+        MaxR :: non_neg_integer(), MaxT :: pos_integer()},
         [ChildSpec :: supervisor:child_spec()]
     }} |
-    ignore |
-    {error, Reason :: term()}).
+    ignore).
 init([]) ->
     RestartStrategy = one_for_one,
     MaxRestarts = 1000,
@@ -81,6 +80,8 @@ init([]) ->
     Shutdown = 2000,
     Type = worker,
 
+    IpWorker = {cip_id, {deploy_track_ip, start_link, []},
+        Restart, Shutdown, Type, [deploy_track_ip]},
     CloudWorker = {cloud_id, {deploy_track_pkgcloud, start_link, []},
         Restart, Shutdown, Type, [deploy_track_pkgcloud]},
     S3Worker = {s3_id, {deploy_track_s3, start_link, []},
@@ -88,7 +89,7 @@ init([]) ->
     AnalyticsWorker = {analtyics_id, {deploy_track_analytics, start_link, []},
         Restart, Shutdown, Type, [deploy_track_analytics]},
 
-    {ok, {SupFlags, [CloudWorker, S3Worker, AnalyticsWorker]}}.
+    {ok, {SupFlags, [IpWorker, CloudWorker, S3Worker, AnalyticsWorker]}}.
 
 %%%===================================================================
 %%% Internal functions
