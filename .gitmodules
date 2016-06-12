@@ -1,0 +1,4 @@
+[submodule "tools.mk"]
+	path = tools.mk
+	url = git@github.com:basho/tools.mk
+	branch = rebar3
