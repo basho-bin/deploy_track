@@ -55,6 +55,8 @@
     code_change/3
 ]).
 
+-export_type([aws_config/0]).
+
 -define(SERVER, ?MODULE).
 -include_lib("erlcloud/include/erlcloud_aws.hrl").
 -include("deploy_track.hrl").
@@ -265,10 +267,6 @@ stop_loop() ->
     {ok, State :: #state{}} | {ok, State :: #state{}, timeout() | hibernate} |
     {stop, Reason :: term()} | ignore).
 init([]) ->
-    ok = deploy_track_util:ensure_ssl_is_up(),
-    ok = deploy_track_util:ensure_lager_is_up(),
-    ok = deploy_track_util:ensure_services_are_up([xmerl, inets, jsx, lhttpc, erlcloud]),
-
     {ok, S3Host} = application:get_env(deploy_track, s3_hostname),
     {ok, Products} = application:get_env(deploy_track, products),
     {ok, DownloadBucket} = application:get_env(deploy_track, s3_dl_bucket),
@@ -549,8 +547,6 @@ build_analytics(Elements) ->
         os = OS,
         os_version = OSVersion,
         user_agent = UserAgent}.
-        %% IP Lookup currently not used
-        %% ip_details = deploy_track_ip:lookup_ip(IP)}.
 
 
 %%%===================================================================

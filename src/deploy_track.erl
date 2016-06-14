@@ -25,6 +25,7 @@
 
 %% Application callbacks
 -export([
+    resolve_deps/1,
     start/0, start/2,
     stop/1
 ]).

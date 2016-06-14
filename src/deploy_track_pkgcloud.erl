@@ -178,10 +178,6 @@ stop_loop() ->
     {ok, State :: #state{}} | {ok, State :: #state{}, timeout() | hibernate} |
     {stop, Reason :: term()} | ignore).
 init([]) ->
-    ok = deploy_track_util:ensure_ssl_is_up(),
-    ok = deploy_track_util:ensure_lager_is_up(),
-    ok = deploy_track_util:ensure_services_are_up([ibrowse]),
-
     {ok, Products} = application:get_env(deploy_track, products),
     {ok, ApiKey} = application:get_env(deploy_track, pkgcloud_key),
     {ok, User} = application:get_env(deploy_track, pkgcloud_user),
@@ -532,5 +528,3 @@ build_analytics(Details) ->
         os = OS,
         os_version = OSVersion,
         user_agent = UserAgent}.
-        %% IP lookup is currently not used
-        %% ip_details = deploy_track_ip:lookup_ip(IP)}.

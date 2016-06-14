@@ -80,8 +80,6 @@ init([]) ->
     Shutdown = 2000,
     Type = worker,
 
-    IpWorker = {cip_id, {deploy_track_ip, start_link, []},
-        Restart, Shutdown, Type, [deploy_track_ip]},
     CloudWorker = {cloud_id, {deploy_track_pkgcloud, start_link, []},
         Restart, Shutdown, Type, [deploy_track_pkgcloud]},
     S3Worker = {s3_id, {deploy_track_s3, start_link, []},
@@ -89,7 +87,7 @@ init([]) ->
     AnalyticsWorker = {analtyics_id, {deploy_track_analytics, start_link, []},
         Restart, Shutdown, Type, [deploy_track_analytics]},
 
-    {ok, {SupFlags, [IpWorker, CloudWorker, S3Worker, AnalyticsWorker]}}.
+    {ok, {SupFlags, [CloudWorker, S3Worker, AnalyticsWorker]}}.
 
 %%%===================================================================
 %%% Internal functions

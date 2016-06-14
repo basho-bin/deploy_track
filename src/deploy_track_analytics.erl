@@ -93,8 +93,7 @@ csv_header() ->
          "Release",
          "OS",
          "OS Version",
-         "User Agent",
-         deploy_track_ip:csv_headers()]).
+         "User Agent"]).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -117,8 +116,6 @@ csv_format(A) ->
          A#analytics.os,
          A#analytics.os_version,
          A#analytics.user_agent]).
-         %% UNUSED
-         %%deploy_track_ip:to_csv(A#analytics.ip_details)]).
 
 csv_format_string() ->
     string:join(lists:duplicate(11, "\"~s\""), ",") ++
