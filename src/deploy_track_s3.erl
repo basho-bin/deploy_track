@@ -267,8 +267,13 @@ stop_loop() ->
     {ok, State :: #state{}} | {ok, State :: #state{}, timeout() | hibernate} |
     {stop, Reason :: term()} | ignore).
 init([]) ->
+    ok = deploy_track_util:ensure_ssl_is_up(),
+    ok = deploy_track_util:ensure_lager_is_up(),
+    ok = deploy_track_util:ensure_services_are_up([xmerl, inets, jsx, lhttpc, erlcloud]),
+
+    lager:info("Starting up ~p", [?MODULE]),
     {ok, S3Host} = application:get_env(deploy_track, s3_hostname),
-    {ok, Products} = application:get_env(deploy_track, products),
+    {ok, Products} = application:get_env(deploy_track, s3_products),
     {ok, DownloadBucket} = application:get_env(deploy_track, s3_dl_bucket),
     {ok, DownloadPrefix} = application:get_env(deploy_track, s3_dl_prefix),
     {ok, DownloadAccessKey} = application:get_env(deploy_track, s3_dl_access_key),

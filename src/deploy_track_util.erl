@@ -217,7 +217,7 @@ verify_checkpoint(Marker) ->
     Marker :: string()) -> boolean().
 verify_checkpoint(Key, Marker) ->
     Checkpoint = deploy_track_s3:fetch_checkpoint(Key),
-    binary_to_list(Checkpoint) == Marker.
+    Checkpoint == Marker.
 
 %%%===================================================================
 %%% Internal functions

@@ -150,6 +150,10 @@ write_record(Record) ->
     {ok, State :: #state{}} | {ok, State :: #state{}, timeout() | hibernate} |
     {stop, Reason :: term()} | ignore).
 init([]) ->
+    ok = deploy_track_util:ensure_ssl_is_up(),
+    ok = deploy_track_util:ensure_lager_is_up(),
+
+    lager:info("Starting up ~p", [?MODULE]),
     Url = application:get_env(deploy_track, analytics_url,
                               "https://www.google-analytics.com/collect"),
     {ok, Tid} = application:get_env(deploy_track, analytics_tid),

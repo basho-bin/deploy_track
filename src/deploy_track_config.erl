@@ -67,6 +67,7 @@ hostname() ->
                             App :: atom()) ->
                             deploy_track_util:proplist().
 extract_from_cfg_file(Filename, App) ->
+    io:format(user, "Extracting config from file ~p~n", [Filename]),
     {ok,[Cfg]} = file:consult(Filename),
     proplists:get_value(App, Cfg).
 
@@ -86,6 +87,13 @@ extract_os_env() ->
      {pkgcloud_key, PkgCloudKey},
      {analytics_tid, AnalyticsTid}].
 
--spec config_file() -> string().
+-spec config_file() -> string() | {error, term()}.
 config_file() ->
-    os:getenv("CONFIG").
+    File = os:getenv("DEPLOY_TRACK_CONFIG"),
+    case File of
+        false ->
+            io:format(user, "ERROR: DEPLOY_TRACK_CONFIG is not set~n", []),
+            {error, config_env_not_set};
+        _ ->
+            File
+    end.

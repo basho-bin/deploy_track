@@ -178,7 +178,12 @@ stop_loop() ->
     {ok, State :: #state{}} | {ok, State :: #state{}, timeout() | hibernate} |
     {stop, Reason :: term()} | ignore).
 init([]) ->
-    {ok, Products} = application:get_env(deploy_track, products),
+    ok = deploy_track_util:ensure_ssl_is_up(),
+    ok = deploy_track_util:ensure_lager_is_up(),
+    ok = deploy_track_util:ensure_services_are_up([ibrowse]),
+
+    lager:info("Starting up ~p", [?MODULE]),
+    {ok, Products} = application:get_env(deploy_track, pkgcloud_products),
     {ok, ApiKey} = application:get_env(deploy_track, pkgcloud_key),
     {ok, User} = application:get_env(deploy_track, pkgcloud_user),
     {ok, Interval} = application:get_env(deploy_track, s3_interval),
@@ -401,12 +406,15 @@ do_fetch_checkpoint(Key) ->
 return_checkpoint_list({error, Reason}) ->
     {error, Reason};
 return_checkpoint_list(Checkpoint) when is_binary(Checkpoint) ->
-    binary_to_list(Checkpoint).
+    binary_to_list(Checkpoint);
+return_checkpoint_list(Checkpoint) when is_list(Checkpoint) ->
+    Checkpoint.
 
 -spec do_loop(State :: #state{}) -> string().
 do_loop(State = #state{products = Products,
                        up_key = Key}) ->
     Marker = do_fetch_checkpoint(Key),
+    lager:debug("Looking for these products ~p", [Products]),
     Pkgs = do_packages(Products, State),
     lager:debug("Loaded ~b packages", [length(Pkgs)]),
     Details = fetch_next_events(Pkgs, Marker, State),
@@ -431,6 +439,7 @@ fetch_next_events(Pkgs, Checkpoint, State) ->
         fun(P, Acc) ->
             lager:debug("Fetching events from package ~p", [P]),
             Details = do_details(P, [{start_date, StartDate}], State),
+            lager:debug("Found events: ~p", [Details]),
             lager:debug("Found ~b events", [length(Details)]),
             lists:append(Acc, Details)
         end, [], Pkgs),
