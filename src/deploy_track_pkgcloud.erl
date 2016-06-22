@@ -188,15 +188,14 @@ init([]) ->
     {ok, User} = application:get_env(deploy_track, pkgcloud_user),
     {ok, Interval} = application:get_env(deploy_track, s3_interval),
     %% Fire off the main loop right away
-    %% Timer = erlang:send_after(1000, global:whereis_name(?SERVER), loop_timer),
+    Timer = erlang:send_after(1000, global:whereis_name(?SERVER), loop_timer),
     {ok,UploadKey} = application:get_env(deploy_track, pkgcloud_up_key),
     {ok, #state{base_url   = build_base_url(ApiKey),
                 params     = [{user, User}],
                 products   = Products,
                 packages   = [],
                 up_key     = UploadKey,
-                loop_timer = undefined,
-                % loop_timer = Timer,
+                loop_timer = Timer,
                 interval   = Interval}}.
 
 %%--------------------------------------------------------------------
