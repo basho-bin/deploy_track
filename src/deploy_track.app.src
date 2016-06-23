@@ -21,7 +21,7 @@
 {application, deploy_track, [
     {description, "Basho Deployment Tracker"},
     {vsn, "1.0.0"},
-    {registered, [deploy_track]},
+    {registered, [deploy_track_app]},
     {applications, [
         kernel,
         stdlib,
@@ -30,8 +30,8 @@
         ibrowse,
         erlcloud
     ]},
-    {modules, [deploy_track, deploy_track_analytics, deploy_track_pkgcloud, deploy_track_s3, deploy_track_sup]},
-    {mod, {deploy_track, []}},
+    {modules, [deploy_track_app, deploy_track_analytics, deploy_track_pkgcloud, deploy_track_s3, deploy_track_sup]},
+    {mod, {deploy_track_app, []}},
     {env, []},
     {links,[{"Github","https://github.com/basho-bin/deploy_track"}]}
 ]}.

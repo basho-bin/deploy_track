@@ -27,6 +27,7 @@
 
 %% API
 -export([
+    cancel_current_timer/1,
     encode_query_string/1,
     ensure_services_are_up/1,
     ensure_lager_is_up/0,
@@ -218,6 +219,14 @@ verify_checkpoint(Marker) ->
 verify_checkpoint(Key, Marker) ->
     Checkpoint = deploy_track_s3:fetch_checkpoint(Key),
     Checkpoint == Marker.
+
+%% If a timer is passed in, cancel it
+-spec cancel_current_timer(undefined | timer:tref()) -> ok.
+cancel_current_timer(undefined) ->
+    ok;
+cancel_current_timer(Timer) ->
+    timer:cancel(Timer),
+    ok.
 
 %%%===================================================================
 %%% Internal functions

@@ -67,7 +67,7 @@
     products   :: [string()],
     packages   :: [deploy_track_util:proplist()],
     up_key     :: string(), %% S3 upload key
-    loop_timer :: reference(), %% Timer to periodically run main loop
+    loop_timer :: timer:tref() | undefined, %% Timer to periodically run main loop
     interval   :: integer() %% Milliseconds between loop calls
 }).
 
@@ -187,15 +187,13 @@ init([]) ->
     {ok, ApiKey} = application:get_env(deploy_track, pkgcloud_key),
     {ok, User} = application:get_env(deploy_track, pkgcloud_user),
     {ok, Interval} = application:get_env(deploy_track, s3_interval),
-    %% Fire off the main loop right away
-    Timer = erlang:send_after(1000, global:whereis_name(?SERVER), loop_timer),
     {ok,UploadKey} = application:get_env(deploy_track, pkgcloud_up_key),
     {ok, #state{base_url   = build_base_url(ApiKey),
                 params     = [{user, User}],
                 products   = Products,
                 packages   = [],
                 up_key     = UploadKey,
-                loop_timer = Timer,
+                loop_timer = undefined,
                 interval   = Interval}}.
 
 %%--------------------------------------------------------------------
@@ -238,14 +236,26 @@ handle_call({checkpoint, Marker}, _From, State = #state{up_key = Key}) ->
 handle_call(fetch_checkpoint, _From, State = #state{up_key = Key}) ->
     Reply = do_fetch_checkpoint(Key),
     {reply, Reply, State};
-handle_call(loop, _From, State) ->
+handle_call(loop, _From, State = #state{loop_timer = Timer,
+    interval   = Interval}) ->
     Result = do_loop(State),
-    {reply, Result, State};
-handle_call(start_loop, _From, State) ->
-    Timer = erlang:send_after(1000, global:whereis_name(?SERVER), loop_timer),
-    {reply, ok, State#state{loop_timer = Timer}};
-handle_call(stop_loop, _From, State = #state{loop_timer = OldTimer}) ->
-    erlang:cancel_timer(OldTimer),
+    %% If there is no current timer, don't start a new one
+    NewTimer = case Timer of
+                   undefined ->
+                       Timer;
+                   _ ->
+                       deploy_track_util:cancel_current_timer(Timer),
+                       {ok, T} = schedule_loop(Interval),
+                       T
+               end,
+    {reply, Result, State#state{loop_timer = NewTimer}};
+handle_call(start_loop, _From, State = #state{loop_timer = Timer}) ->
+    deploy_track_util:cancel_current_timer(Timer),
+    %% If we are restarting a loop, fire it off after 1 sec
+    {ok, NewTimer} = schedule_loop(1000),
+    {reply, ok, State#state{loop_timer = NewTimer}};
+handle_call(stop_loop, _From, State = #state{loop_timer = Timer}) ->
+    deploy_track_util:cancel_current_timer(Timer),
     {reply, ok, State#state{loop_timer = undefined}};
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
@@ -278,13 +288,6 @@ handle_cast(_Request, State) ->
     {noreply, NewState :: #state{}} |
     {noreply, NewState :: #state{}, timeout() | hibernate} |
     {stop, Reason :: term(), NewState :: #state{}}).
-handle_info(loop_timer, State = #state{loop_timer = OldTimer,
-                                       interval = Interval}) ->
-    lager:debug("Received loop_timer"),
-    erlang:cancel_timer(OldTimer),
-    do_loop(State),
-    Timer = erlang:send_after(Interval, global:whereis_name(?SERVER), loop_timer),
-    {noreply, State#state{loop_timer = Timer}};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -405,9 +408,7 @@ do_fetch_checkpoint(Key) ->
 return_checkpoint_list({error, Reason}) ->
     {error, Reason};
 return_checkpoint_list(Checkpoint) when is_binary(Checkpoint) ->
-    binary_to_list(Checkpoint);
-return_checkpoint_list(Checkpoint) when is_list(Checkpoint) ->
-    Checkpoint.
+    binary_to_list(Checkpoint).
 
 -spec do_loop(State :: #state{}) -> string().
 do_loop(State = #state{products = Products,
@@ -536,3 +537,8 @@ build_analytics(Details) ->
         os = OS,
         os_version = OSVersion,
         user_agent = UserAgent}.
+
+%% Schedule the next loop
+-spec schedule_loop(Interval :: integer()) -> {ok, timer:tref()} | {error, term()}.
+schedule_loop(Interval) ->
+    timer:apply_after(Interval, global:whereis_name(?SERVER), do_loop, []).

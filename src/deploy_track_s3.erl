@@ -70,7 +70,7 @@
     up_bucket      :: string(), %% Name of S3 upload bucket (last recorded)
     up_key         :: string(), %% Name of S3 upload bucket key
     up_config      :: aws_config(),
-    loop_timer     :: reference(), %% Timer to periodically run main loop
+    loop_timer     :: timer:tref() | undefined, %% Timer to periodically run main loop
     interval       :: integer() %% Milliseconds between loop calls
 }).
 
@@ -285,8 +285,6 @@ init([]) ->
     {ok, UploadSecretKey} = application:get_env(deploy_track, s3_up_secret_key),
     UploadConfig = make_aws_config(UploadAccessKey, UploadSecretKey, S3Host),
     {ok, Interval} = application:get_env(deploy_track, s3_interval),
-    %% Fire off the main loop right away
-    Timer = erlang:send_after(1000, global:whereis_name(?SERVER), loop_timer),
     {ok, #state{
                 s3_hostname     = S3Host,
                 products        = Products,
@@ -296,7 +294,7 @@ init([]) ->
                 up_bucket       = UploadBucket,
                 up_key          = UploadKey,
                 up_config       = UploadConfig,
-                loop_timer      = Timer,
+                loop_timer      = undefined,
                 interval        = Interval
     }}.
 
@@ -346,14 +344,26 @@ handle_call({write_analytics, Marker}, _From, State) ->
 handle_call({write_analytics_record, Marker}, _From, State) ->
     Result = do_write_analytics_record(Marker, State),
     {reply, Result, State};
-handle_call(loop, _From, State) ->
+handle_call(loop, _From, State = #state{loop_timer = Timer,
+                                        interval   = Interval}) ->
     Result = do_loop(State),
-    {reply, Result, State};
-handle_call(start_loop, _From, State) ->
-    Timer = erlang:send_after(1000, global:whereis_name(?SERVER), loop_timer),
-    {reply, ok, State#state{loop_timer = Timer}};
-handle_call(stop_loop, _From, State = #state{loop_timer = OldTimer}) ->
-    erlang:cancel_timer(OldTimer),
+    %% If there is no current timer, don't start a new one
+    NewTimer = case Timer of
+        undefined ->
+            Timer;
+        _ ->
+            deploy_track_util:cancel_current_timer(Timer),
+            {ok, T} = schedule_loop(Interval),
+            T
+    end,
+    {reply, Result, State#state{loop_timer = NewTimer}};
+handle_call(start_loop, _From, State = #state{loop_timer = Timer}) ->
+    deploy_track_util:cancel_current_timer(Timer),
+    %% If we are restarting a loop, fire it off after 1 sec
+    {ok, NewTimer} = schedule_loop(1000),
+    {reply, ok, State#state{loop_timer = NewTimer}};
+handle_call(stop_loop, _From, State = #state{loop_timer = Timer}) ->
+    deploy_track_util:cancel_current_timer(Timer),
     {reply, ok, State#state{loop_timer = undefined}};
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
@@ -386,12 +396,6 @@ handle_cast(_Request, State) ->
     {noreply, NewState :: #state{}} |
     {noreply, NewState :: #state{}, timeout() | hibernate} |
     {stop, Reason :: term(), NewState :: #state{}}).
-handle_info(loop_timer, State = #state{loop_timer = OldTimer,
-                                       interval = Interval}) ->
-    erlang:cancel_timer(OldTimer),
-    do_loop(State),
-    Timer = erlang:send_after(Interval, global:whereis_name(?SERVER), loop_timer),
-    {noreply, State#state{loop_timer = Timer}};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -773,4 +777,11 @@ verify_checkpoint(Marker, State = #state{up_key = Key}) ->
             ok
     end,
     Valid.
+
+%% Schedule the next loop
+-spec schedule_loop(Interval :: integer()) -> {ok, timer:tref()} | {error, term()}.
+schedule_loop(Interval) ->
+    timer:apply_after(Interval, global:whereis_name(?SERVER), do_loop, []).
+
+
 

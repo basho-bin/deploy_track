@@ -18,7 +18,7 @@
 %%
 %% -------------------------------------------------------------------
 
--module(deploy_track).
+-module(deploy_track_app).
 -author("hazen").
 
 -behaviour(application).
@@ -52,11 +52,12 @@ start() ->
     {ok, pid()} |
     {ok, pid(), State :: term()} |
     {error, Reason :: term()}).
-start(normal, _StartArgs) ->
+start(_Type, _StartArgs) ->
     %% deploy_track_config:extract_env(),
-    deploy_track_sup:start_link();
-start({takeover, _OtherNode}, _StartArgs) ->
-    deploy_track_sup:start_link().
+    {ok, Pid} = deploy_track_sup:start_link(),
+    deploy_track_s3:start_loop(),
+    deploy_track_pkgcloud:start_loop(),
+    {ok, Pid}.
 
 %%--------------------------------------------------------------------
 %% @private
