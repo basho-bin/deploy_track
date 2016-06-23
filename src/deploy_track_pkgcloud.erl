@@ -188,6 +188,8 @@ init([]) ->
     {ok, User} = application:get_env(deploy_track, pkgcloud_user),
     {ok, Interval} = application:get_env(deploy_track, s3_interval),
     {ok,UploadKey} = application:get_env(deploy_track, pkgcloud_up_key),
+    %% Start the main loop more or less immediately
+    schedule_loop(1000),
     {ok, #state{base_url   = build_base_url(ApiKey),
                 params     = [{user, User}],
                 products   = Products,
@@ -408,7 +410,9 @@ do_fetch_checkpoint(Key) ->
 return_checkpoint_list({error, Reason}) ->
     {error, Reason};
 return_checkpoint_list(Checkpoint) when is_binary(Checkpoint) ->
-    binary_to_list(Checkpoint).
+    binary_to_list(Checkpoint);
+return_checkpoint_list(Checkpoint) when is_list(Checkpoint) ->
+    Checkpoint.
 
 -spec do_loop(State :: #state{}) -> string().
 do_loop(State = #state{products = Products,
@@ -541,4 +545,5 @@ build_analytics(Details) ->
 %% Schedule the next loop
 -spec schedule_loop(Interval :: integer()) -> {ok, timer:tref()} | {error, term()}.
 schedule_loop(Interval) ->
-    timer:apply_after(Interval, global:whereis_name(?SERVER), do_loop, []).
+    lager:debug("Running ~p:do_loop after ~b ms", [?MODULE, Interval]),
+    timer:apply_after(Interval, ?MODULE, loop, []).

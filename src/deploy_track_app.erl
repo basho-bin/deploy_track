@@ -54,10 +54,7 @@ start() ->
     {error, Reason :: term()}).
 start(_Type, _StartArgs) ->
     %% deploy_track_config:extract_env(),
-    {ok, Pid} = deploy_track_sup:start_link(),
-    deploy_track_s3:start_loop(),
-    deploy_track_pkgcloud:start_loop(),
-    {ok, Pid}.
+    deploy_track_sup:start_link().
 
 %%--------------------------------------------------------------------
 %% @private

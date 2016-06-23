@@ -223,7 +223,7 @@ checkpoint(Key, Checkpoint) ->
 fetch_checkpoint() ->
     gen_server:call({global, ?SERVER}, fetch_checkpoint, get_dl_timeout()).
 
--spec fetch_checkpoint(Key :: string()) -> binary() | {error, Reason :: term()}.
+-spec fetch_checkpoint(Key :: string()) -> binary() | string() | {error, Reason :: term()}.
 fetch_checkpoint(Key) ->
     gen_server:call({global, ?SERVER}, {fetch_checkpoint, Key}, get_dl_timeout()).
 
@@ -285,6 +285,8 @@ init([]) ->
     {ok, UploadSecretKey} = application:get_env(deploy_track, s3_up_secret_key),
     UploadConfig = make_aws_config(UploadAccessKey, UploadSecretKey, S3Host),
     {ok, Interval} = application:get_env(deploy_track, s3_interval),
+    %% Start the main loop more or less immediately
+    schedule_loop(1000),
     {ok, #state{
                 s3_hostname     = S3Host,
                 products        = Products,
@@ -781,7 +783,8 @@ verify_checkpoint(Marker, State = #state{up_key = Key}) ->
 %% Schedule the next loop
 -spec schedule_loop(Interval :: integer()) -> {ok, timer:tref()} | {error, term()}.
 schedule_loop(Interval) ->
-    timer:apply_after(Interval, global:whereis_name(?SERVER), do_loop, []).
+    lager:debug("Running ~p:do_loop after ~b ms", [?MODULE, Interval]),
+    timer:apply_after(Interval, ?MODULE, loop, []).
 
 
 
