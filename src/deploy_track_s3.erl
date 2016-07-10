@@ -414,7 +414,8 @@ handle_info(_Info, State) ->
 %%--------------------------------------------------------------------
 -spec(terminate(Reason :: (normal | shutdown | {shutdown, term()} | term()),
     State :: #state{}) -> term()).
-terminate(_Reason, _State) ->
+terminate(Reason, _State) ->
+    lager:info("Stopping ~p for reason ~p", [?MODULE, Reason]),
     ok.
 
 %%--------------------------------------------------------------------

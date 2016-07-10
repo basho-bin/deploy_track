@@ -67,6 +67,7 @@ start(_Type, _StartArgs) ->
 %%--------------------------------------------------------------------
 -spec(stop(State :: term()) -> term()).
 stop(_State) ->
+    io:format("Stopped application ~p~n", [?MODULE]),
     ok.
 
 %%%===================================================================
