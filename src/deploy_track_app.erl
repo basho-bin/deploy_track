@@ -53,8 +53,8 @@ start() ->
     {ok, pid(), State :: term()} |
     {error, Reason :: term()}).
 start(_Type, _StartArgs) ->
-    %% deploy_track_config:extract_env(),
-    deploy_track_sup:start_link().
+    ok.
+    %%deploy_track_sup:start_link().
 
 %%--------------------------------------------------------------------
 %% @private
@@ -67,6 +67,7 @@ start(_Type, _StartArgs) ->
 %%--------------------------------------------------------------------
 -spec(stop(State :: term()) -> term()).
 stop(_State) ->
+    lager:info("Stopped application ~p", [?MODULE]),
     io:format("Stopped application ~p~n", [?MODULE]),
     ok.
 
