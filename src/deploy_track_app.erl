@@ -53,8 +53,7 @@ start() ->
     {ok, pid(), State :: term()} |
     {error, Reason :: term()}).
 start(_Type, _StartArgs) ->
-    {ok, self()}.
-    %%deploy_track_sup:start_link().
+    deploy_track_sup:start_link().
 
 %%--------------------------------------------------------------------
 %% @private
