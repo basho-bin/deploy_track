@@ -39,8 +39,7 @@
     mon_to_num/1,
     split_with_quotes/1,
     send_request/5, send_request/6,
-    stringify/1,
-    verify_checkpoint/1, verify_checkpoint/2
+    stringify/1
 ]).
 
 -type property()     :: atom() | tuple().
@@ -204,21 +203,6 @@ iso_8601_date_format({{Y, M, D}, {H, Mi, S}}) ->
 -spec encode_query_string(proplist()) -> string().
 encode_query_string(Argument) ->
     string:join([string:join([stringify(P), stringify(V)], "=") || {P, V} <- Argument], "&").
-
-
-%% Make sure that the checkpoint has not changed by another process
--spec verify_checkpoint(Marker :: string()) -> boolean().
-verify_checkpoint(Marker) ->
-    Checkpoint = deploy_track_s3:fetch_checkpoint(),
-    Checkpoint == Marker.
-
-%% Has someone moved my cheese? Did another process checkpoint?
-%% It's more of a sanity check than a solid guarantee
--spec verify_checkpoint(Key :: string(),
-    Marker :: string()) -> boolean().
-verify_checkpoint(Key, Marker) ->
-    Checkpoint = deploy_track_s3:fetch_checkpoint(Key),
-    Checkpoint == Marker.
 
 %% If a timer is passed in, cancel it
 -spec cancel_current_timer(undefined | timer:tref()) -> ok.

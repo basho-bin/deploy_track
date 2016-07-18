@@ -36,6 +36,7 @@
     fetch_indexes/0, fetch_indexes/1,
     fetch_logs/1,
     loop/0,
+    make_aws_config/3,
     parse_log_records/3,
     start_link/0,
     start_loop/0,

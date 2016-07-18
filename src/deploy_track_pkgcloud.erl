@@ -34,7 +34,9 @@
     build_analytics/1,
     build_key/1,
     cache_packages/0,
+    checkpoint/1,
     fetch_all_packages/0,
+    fetch_checkpoint/0,
     fetch_details/2,
     fetch_packages/1,
     fetch_repos/0,
@@ -59,6 +61,7 @@
 ]).
 
 -define(SERVER, ?MODULE).
+-include_lib("erlcloud/include/erlcloud_aws.hrl").
 -include("deploy_track.hrl").
 
 -record(state, {
@@ -66,7 +69,9 @@
     params     :: deploy_track_util:proplist(),
     products   :: [string()],
     packages   :: [deploy_track_util:proplist()],
-    up_key     :: string(), %% S3 upload key
+    up_bucket  :: string(), %% Name of S3 upload bucket (last recorded)
+    up_key     :: string(), %% Name of S3 upload bucket key
+    up_config  :: aws_config(), %% S3 upload credentials
     loop_timer :: timer:tref() | undefined, %% Timer to periodically run main loop
     interval   :: integer() %% Milliseconds between loop calls
 }).
@@ -141,6 +146,27 @@ fetch_details(Package, Arguments) ->
 
 %%--------------------------------------------------------------------
 %% @doc
+%% Write a marker to S3 to mark the last successfully completed entry.
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec checkpoint(Checkpoint :: string()) ->
+    ok | {error, Reason :: term()}.
+checkpoint(Checkpoint) ->
+    gen_server:call({global, ?SERVER}, {checkpoint, Checkpoint}, get_pkgcloud_timeout()).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Read a marker from S3 which marked the last successfully completed entry.
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec fetch_checkpoint() -> binary() | {error, Reason :: term()}.
+fetch_checkpoint() ->
+    gen_server:call({global, ?SERVER}, fetch_checkpoint, get_pkgcloud_timeout()).
+
+%%--------------------------------------------------------------------
+%% @doc
 %% The main processing loop.  It pulls the last successful key and
 %% reads any changes since then and uploads to Google Analytics
 %%
@@ -187,14 +213,21 @@ init([]) ->
     {ok, ApiKey} = application:get_env(deploy_track, pkgcloud_key),
     {ok, User} = application:get_env(deploy_track, pkgcloud_user),
     {ok, Interval} = application:get_env(deploy_track, s3_interval),
-    {ok,UploadKey} = application:get_env(deploy_track, pkgcloud_up_key),
+    {ok, UploadBucket} = application:get_env(deploy_track, s3_up_bucket),
+    {ok, UploadKey} = application:get_env(deploy_track, pkgcloud_up_key),
+    {ok, UploadAccessKey} = application:get_env(deploy_track, s3_up_access_key),
+    {ok, UploadSecretKey} = application:get_env(deploy_track, s3_up_secret_key),
+    {ok, S3Host} = application:get_env(deploy_track, s3_hostname),
+    UploadConfig = deploy_track_s3:make_aws_config(UploadAccessKey, UploadSecretKey, S3Host),
     %% Start the main loop more or less immediately
     schedule_loop(1000),
     {ok, #state{base_url   = build_base_url(ApiKey),
                 params     = [{user, User}],
                 products   = Products,
                 packages   = [],
+                up_bucket  = UploadBucket,
                 up_key     = UploadKey,
+                up_config  = UploadConfig,
                 loop_timer = undefined,
                 interval   = Interval}}.
 
@@ -232,12 +265,13 @@ handle_call({count, Params}, _From, State) ->
     do_count(Params, State),
     Reply = do_count(Params, State),
     {reply, Reply, State};
-handle_call({checkpoint, Marker}, _From, State = #state{up_key = Key}) ->
-    Reply = do_checkpoint(Key, Marker),
-    {reply, Reply, State};
+handle_call({checkpoint, Checkpoint}, _From,
+    State = #state{up_key = Key}) ->
+    Result = do_write_checkpoint(Key, Checkpoint, State),
+    {reply, Result, State};
 handle_call(fetch_checkpoint, _From, State = #state{up_key = Key}) ->
-    Reply = do_fetch_checkpoint(Key),
-    {reply, Reply, State};
+    Result = do_fetch_checkpoint(Key, State),
+    {reply, Result, State};
 handle_call(loop, _From, State = #state{loop_timer = Timer,
     interval   = Interval}) ->
     Result = do_loop(State),
@@ -397,28 +431,10 @@ do_count(Params, State) ->
     {ok, Reply} = deploy_track_util:ignore_not_found(send_request(State, get, Params, Template, [])),
     Reply.
 
--spec do_checkpoint(Key :: string(), Marker :: string()) -> ok | {error, term()}.
-do_checkpoint(Key, Marker) ->
-    deploy_track_s3:checkpoint(Key, Marker).
-
--spec do_fetch_checkpoint(Key :: string()) -> string() | {error, term()}.
-do_fetch_checkpoint(Key) ->
-    Checkpoint = deploy_track_s3:fetch_checkpoint(Key),
-    return_checkpoint_list(Checkpoint).
-
--spec return_checkpoint_list(Checkpoint :: string() | {error, Reason :: term()}) ->
-    string().
-return_checkpoint_list({error, Reason}) ->
-    {error, Reason};
-return_checkpoint_list(Checkpoint) when is_binary(Checkpoint) ->
-    binary_to_list(Checkpoint);
-return_checkpoint_list(Checkpoint) when is_list(Checkpoint) ->
-    Checkpoint.
-
 -spec do_loop(State :: #state{}) -> string().
 do_loop(State = #state{products = Products,
                        up_key = Key}) ->
-    Marker = do_fetch_checkpoint(Key),
+    Marker = do_fetch_checkpoint(Key, State),
     lager:debug("Looking for these products ~p", [Products]),
     Pkgs = do_packages(Products, State),
     lager:debug("Loaded ~b packages", [length(Pkgs)]),
@@ -476,10 +492,10 @@ do_write_analytics([], Marker, _State) ->
     Marker;
 do_write_analytics([H|T], Marker, State = #state{up_key = Key}) ->
     NewMarker = H#analytics.key,
-    case deploy_track_util:verify_checkpoint(Key, Marker) of
+    case verify_checkpoint(Marker, State) of
         true ->
             deploy_track_analytics:write_record(H),
-            deploy_track_s3:checkpoint(Key, NewMarker),
+            do_write_checkpoint(Key, NewMarker, State),
             do_write_analytics(T, NewMarker, State);
         _ ->
             lager:error("Checkpoint has been updated by another process."),
@@ -548,3 +564,50 @@ build_analytics(Details) ->
 schedule_loop(Interval) ->
     lager:debug("Running ~p:do_loop after ~b ms", [?MODULE, Interval]),
     timer:apply_after(Interval, ?MODULE, loop, []).
+
+%% Write the last successful key to S3
+-spec do_write_checkpoint(Key :: string(),
+                          Checkpoint :: string(),
+                          State :: #state{}) -> [{version_id, string()}].
+do_write_checkpoint(Key, Checkpoint,
+                    #state{up_bucket = Bucket,
+                           up_config = Cfg}) ->
+    Result = erlcloud_s3:put_object(Bucket, Key, Checkpoint, Cfg),
+    lager:info("Wrote checkpoint ~s to ~s/~s resulting in ~p",
+               [Checkpoint, Bucket, Key, Result]),
+    Result.
+
+%% Read the last successful key to S3
+-spec do_fetch_checkpoint(Key :: string(),
+                          State :: #state{})-> string().
+do_fetch_checkpoint(Key,
+                    #state{up_bucket = Bucket,
+                           up_config = Cfg}) ->
+    lager:debug("Reading checkpoint from ~s/~s",
+                [Bucket, Key]),
+    Result = erlcloud_s3:get_object(Bucket, Key, Cfg),
+    Checkpoint = case proplists:get_value(content, Result) of
+                     undefined ->
+                         "Checkpoint Undefined";
+                     Binary ->
+                         binary_to_list(Binary)
+                 end,
+    lager:info("Read checkpoint ~p from ~s/~s",
+               [Checkpoint, Bucket, Key]),
+    Checkpoint.
+
+%% Has someone moved my cheese? Did another process checkpoint?
+%% It's more of a sanity check than a solid guarantee
+-spec verify_checkpoint(Marker :: string(),
+                        State :: #state{}) -> boolean().
+verify_checkpoint(Marker, State = #state{up_key = Key}) ->
+    Checkpoint = do_fetch_checkpoint(Key, State),
+    Valid = (Checkpoint == Marker),
+    case Valid of
+        false ->
+            lager:error("The checkpoint was ~p and now is ~p",
+                [Marker, Checkpoint]);
+        _ ->
+            ok
+    end,
+    Valid.
