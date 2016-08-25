@@ -270,7 +270,7 @@ stop_loop() ->
 init([]) ->
     ok = deploy_track_util:ensure_ssl_is_up(),
     ok = deploy_track_util:ensure_lager_is_up(),
-    ok = deploy_track_util:ensure_services_are_up([xmerl, inets, jsx, lhttpc, erlcloud]),
+    ok = deploy_track_util:ensure_services_are_up([xmerl, inets, jsx, lhttpc, erlcloud, mnesia]),
 
     lager:info("Starting up ~p", [?MODULE]),
     {ok, S3Host} = application:get_env(deploy_track, s3_hostname),
@@ -286,8 +286,9 @@ init([]) ->
     {ok, UploadSecretKey} = application:get_env(deploy_track, s3_up_secret_key),
     UploadConfig = make_aws_config(UploadAccessKey, UploadSecretKey, S3Host),
     {ok, Interval} = application:get_env(deploy_track, s3_interval),
+
     %% Start the main loop more or less immediately
-    schedule_loop(1000),
+    {ok, Timer} = schedule_loop(1000),
     {ok, #state{
                 s3_hostname     = S3Host,
                 products        = Products,
@@ -297,7 +298,7 @@ init([]) ->
                 up_bucket       = UploadBucket,
                 up_key          = UploadKey,
                 up_config       = UploadConfig,
-                loop_timer      = undefined,
+                loop_timer      = Timer,
                 interval        = Interval
     }}.
 
@@ -349,6 +350,7 @@ handle_call({write_analytics_record, Marker}, _From, State) ->
     {reply, Result, State};
 handle_call(loop, _From, State = #state{loop_timer = Timer,
                                         interval   = Interval}) ->
+    lager:debug("Handling loop message", []),
     Result = do_loop(State),
     %% If there is no current timer, don't start a new one
     NewTimer = case Timer of
@@ -681,28 +683,31 @@ do_fetch_logs(Index,
 do_write_checkpoint(Key, Checkpoint,
                     #state{up_bucket = Bucket,
                            up_config = Cfg}) ->
+    %% Write to S3 for case of catastrophe
     Result = erlcloud_s3:put_object(Bucket, Key, Checkpoint, Cfg),
-    lager:info("Wrote checkpoint ~s to ~s/~s resulting in ~p",
+    lager:info("Wrote checkpoint ~s to S3 ~s/~s resulting in ~p",
                [Checkpoint, Bucket, Key, Result]),
+    Tran = fun() ->
+        ok = mnesia:write(?CHECKPOINT_TABLE,
+                          #checkpoint{key = Key, value = Checkpoint},
+                          sticky_write)
+        end,
+    mnesia:transaction(Tran),
     Result.
 
 %% Read the last successful key to S3
 -spec do_fetch_checkpoint(Key :: string(),
                           State :: #state{})-> string().
-do_fetch_checkpoint(Key,
-                    #state{up_bucket = Bucket,
-                           up_config = Cfg}) ->
+do_fetch_checkpoint(Key, _State) ->
     lager:debug("Reading checkpoint from ~s/~s",
-                [Bucket, Key]),
-    Result = erlcloud_s3:get_object(Bucket, Key, Cfg),
-    Checkpoint = case proplists:get_value(content, Result) of
-                     undefined ->
-                         "Checkpoint Undefined";
-                     Binary ->
-                         binary_to_list(Binary)
-                 end,
+                [?CHECKPOINT_TABLE, Key]),
+    Tran = fun() ->
+                mnesia:read({?CHECKPOINT_TABLE, Key})
+           end,
+    {atomic, [Result]} = mnesia:transaction(Tran),
+    Checkpoint = Result#checkpoint.value,
     lager:info("Read checkpoint ~p from ~s/~s",
-               [Checkpoint, Bucket, Key]),
+               [Checkpoint, ?CHECKPOINT_TABLE, Key]),
     Checkpoint.
 
 %% Write all of the logs at a given index to Google Analytics
@@ -785,8 +790,5 @@ verify_checkpoint(Marker, State = #state{up_key = Key}) ->
 %% Schedule the next loop
 -spec schedule_loop(Interval :: integer()) -> {ok, timer:tref()} | {error, term()}.
 schedule_loop(Interval) ->
-    lager:debug("Running ~p:do_loop after ~b ms", [?MODULE, Interval]),
+    lager:debug("Running ~p:loop after ~b ms", [?MODULE, Interval]),
     timer:apply_after(Interval, ?MODULE, loop, []).
-
-
-

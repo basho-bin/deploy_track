@@ -38,3 +38,11 @@
     %%ip_details       :: {ok, deploy_track_util:proplist()} |
     %%                    {error, list()} | term()
 }).
+
+%% Used by Mnesia
+-record(checkpoint, {
+    key   :: string(),
+    value :: string()
+}).
+
+-define(CHECKPOINT_TABLE, checkpoint).

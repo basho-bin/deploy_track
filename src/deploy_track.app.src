@@ -28,7 +28,8 @@
         lager,
         ssl,
         ibrowse,
-        erlcloud
+        erlcloud,
+        mnesia
     ]},
     {modules, [deploy_track_app, deploy_track_analytics, deploy_track_pkgcloud, deploy_track_s3, deploy_track_sup]},
     {mod, {deploy_track_app, []}},
