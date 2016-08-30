@@ -5,6 +5,13 @@ Package download analytics
 
 See https://docs.google.com/document/d/1xGtmbk5jwhS4u1tH-iPUObL7o-OgRvhTbv-MpUDhJEo/edit?userstoinvite=phagan@basho.com&ts=5710147d&actionButton=1#heading=h.1n5oaoo3fkvo
 
+# Checkpointing
+
+The primary progress of both the S3 and Package Cloud downloads are tracked in Mnesia.
+In the case of catastrophic failure in which both nodes are lost, the checkpoint data
+is also written out to S3 which would allow a manual reconstruction using the steps
+below.
+
 # 1-Time Setup Mnesia Database
 This process will be required after each deployment
 ```bash
