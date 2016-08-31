@@ -54,6 +54,8 @@ create_mnesia(Nodes, S3Key, S3Value, PkgCloudKey, PkgCloudValue) ->
     {atomic, ok} = mnesia:create_table(?CHECKPOINT_TABLE, [{attributes, record_info(fields, ?CHECKPOINT_TABLE)}, {disc_copies, Nodes}, {type, set}]),
     {atomic, ok} = mnesia_write(S3Key, S3Value),
     {atomic, ok} = mnesia_write(PkgCloudKey, PkgCloudValue),
+    [_Leader|Rest] = Nodes,
+    kill_nodes(Rest),
     ok.
 
 %% Write key/value pair to Mnesia
@@ -101,6 +103,12 @@ wait_until_mnesia_running(Nodes) ->
         end
     end,
     wait_until(Nodes, Fun).
+
+%% Kill other nodes once we are finished
+-spec kill_nodes([node()]) -> ok.
+kill_nodes(Nodes) ->
+    [rpc:call(Node, init, stop, [], ?TIMEOUT) || Node <- Nodes],
+    ok.
 
 %% @doc Wrapper to verify `Fun' against multiple nodes. The function `Fun' is passed
 %%      one of the `Nodes' as argument and must return a `boolean()' declaring
