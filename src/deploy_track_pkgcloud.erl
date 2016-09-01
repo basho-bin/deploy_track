@@ -206,7 +206,7 @@ stop_loop() ->
 init([]) ->
     ok = deploy_track_util:ensure_ssl_is_up(),
     ok = deploy_track_util:ensure_lager_is_up(),
-    ok = deploy_track_util:ensure_services_are_up([ibrowse]),
+    ok = deploy_track_util:ensure_services_are_up([ibrowse,mnesia]),
 
     lager:info("Starting up ~p", [?MODULE]),
     {ok, Products} = application:get_env(deploy_track, pkgcloud_products),
@@ -220,7 +220,7 @@ init([]) ->
     {ok, S3Host} = application:get_env(deploy_track, s3_hostname),
     UploadConfig = deploy_track_s3:make_aws_config(UploadAccessKey, UploadSecretKey, S3Host),
     %% Start the main loop more or less immediately
-    schedule_loop(1000),
+    {ok, Timer} = schedule_loop(1000),
     {ok, #state{base_url   = build_base_url(ApiKey),
                 params     = [{user, User}],
                 products   = Products,
@@ -228,7 +228,7 @@ init([]) ->
                 up_bucket  = UploadBucket,
                 up_key     = UploadKey,
                 up_config  = UploadConfig,
-                loop_timer = undefined,
+                loop_timer = Timer,
                 interval   = Interval}}.
 
 %%--------------------------------------------------------------------
@@ -456,7 +456,7 @@ fetch_next_events(Pkgs, Checkpoint, State) ->
         [{capture, all_but_first, list}]),
     StartDate = deploy_track_util:flat_format("~s~s~sZ",[Year, Month, Day]),
     lager:info("Retrieving events from date ~p", [StartDate]),
-    Details = lists:foldr(
+    AllDetails = lists:foldr(
         fun(P, Acc) ->
             lager:debug("Fetching events from package ~p", [P]),
             Details = do_details(P, [{start_date, StartDate}], State),
@@ -464,7 +464,7 @@ fetch_next_events(Pkgs, Checkpoint, State) ->
             lager:debug("Found ~b events", [length(Details)]),
             lists:append(Acc, Details)
         end, [], Pkgs),
-    lists:sort(fun sort_details/2, Details).
+    lists:sort(fun sort_details/2, AllDetails).
 
 %% The last successfully logged event is the Checkpoint.  Remove
 %% all of the events in the day's list which happened before the
@@ -562,7 +562,7 @@ build_analytics(Details) ->
 %% Schedule the next loop
 -spec schedule_loop(Interval :: integer()) -> {ok, timer:tref()} | {error, term()}.
 schedule_loop(Interval) ->
-    lager:debug("Running ~p:do_loop after ~b ms", [?MODULE, Interval]),
+    lager:debug("Running ~p:loop after ~b ms", [?MODULE, Interval]),
     timer:apply_after(Interval, ?MODULE, loop, []).
 
 %% Write the last successful key to S3
@@ -572,28 +572,31 @@ schedule_loop(Interval) ->
 do_write_checkpoint(Key, Checkpoint,
                     #state{up_bucket = Bucket,
                            up_config = Cfg}) ->
+    %% Write to S3 for case of catastrophe
     Result = erlcloud_s3:put_object(Bucket, Key, Checkpoint, Cfg),
-    lager:info("Wrote checkpoint ~s to ~s/~s resulting in ~p",
+    lager:info("Wrote checkpoint ~s to S3 ~s/~s resulting in ~p",
                [Checkpoint, Bucket, Key, Result]),
+    Tran = fun() ->
+        ok = mnesia:write(?CHECKPOINT_TABLE,
+            #checkpoint{key = Key, value = Checkpoint},
+            sticky_write)
+           end,
+    mnesia:transaction(Tran),
     Result.
 
 %% Read the last successful key to S3
 -spec do_fetch_checkpoint(Key :: string(),
                           State :: #state{})-> string().
-do_fetch_checkpoint(Key,
-                    #state{up_bucket = Bucket,
-                           up_config = Cfg}) ->
+do_fetch_checkpoint(Key, _State) ->
     lager:debug("Reading checkpoint from ~s/~s",
-                [Bucket, Key]),
-    Result = erlcloud_s3:get_object(Bucket, Key, Cfg),
-    Checkpoint = case proplists:get_value(content, Result) of
-                     undefined ->
-                         "Checkpoint Undefined";
-                     Binary ->
-                         binary_to_list(Binary)
-                 end,
+                [?CHECKPOINT_TABLE, Key]),
+    Tran = fun() ->
+               mnesia:read({?CHECKPOINT_TABLE, Key})
+           end,
+    {atomic, [Result]} = mnesia:transaction(Tran),
+    Checkpoint = Result#checkpoint.value,
     lager:info("Read checkpoint ~p from ~s/~s",
-               [Checkpoint, Bucket, Key]),
+               [Checkpoint, ?CHECKPOINT_TABLE, Key]),
     Checkpoint.
 
 %% Has someone moved my cheese? Did another process checkpoint?
