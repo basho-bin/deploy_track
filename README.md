@@ -13,7 +13,8 @@ is also written out to S3 which would allow a manual reconstruction using the st
 below.
 
 # 1-Time Setup Mnesia Database
-This process will be required after each deployment
+If manual initialization of Mnesia is required, these steps can be used to recreate the
+database on both nodes:
 ```bash
 #Bring up both nodes as user "ubuntu"
 erl -setcookie deploy_track -name deploy_track
