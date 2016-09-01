@@ -31,16 +31,18 @@
 
 %% API
 -export([
-    mnesia_init/5
+    mnesia_init/1
 ]).
 
 %% Called from the shell, so assume it's a single list of strings
--spec mnesia_init([node()], string(), string(), string(), string()) -> ok.
-mnesia_init(Nodes, S3Key, S3Value, PkgCloudKey, PkgCloudValue) ->
-    [Leader|_Rest] = Nodes,
+-spec mnesia_init([string()]) -> ok.
+mnesia_init([Nodes, S3Key, S3Value, PkgCloudKey, PkgCloudValue]) ->
+    %% Break string into list of atoms
+    AtomNodes = [list_to_atom(string:strip(X)) || X <- string:tokens(Nodes, ",")],
     %% Let the first node do all of the driving
+    Leader = hd(AtomNodes),
     case node() of
-        Leader -> create_mnesia(Nodes, S3Key, S3Value, PkgCloudKey, PkgCloudValue);
+        Leader -> create_mnesia(AtomNodes, S3Key, S3Value, PkgCloudKey, PkgCloudValue);
         _ -> timer:sleep(?IDLE_NODE)
     end,
     ok.
